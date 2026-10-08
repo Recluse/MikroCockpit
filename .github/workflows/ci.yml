@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# build.rs compiles native/dashboard.m against AppKit, so this is macOS-only
+# for now (see "Interface language and platforms" in README).
+jobs:
+  test:
+    name: Test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Unit tests
+        run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Build app bundle
+        run: ./build.sh
+      - name: Dashboard preference checks
+        run: |
+          python3 check_web.py
+          python3 check_memory.py
