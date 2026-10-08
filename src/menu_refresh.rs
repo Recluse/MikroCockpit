@@ -15,7 +15,7 @@ pub struct Tracking {
     depth: Arc<AtomicUsize>,
 }
 fn change_depth(depth: &AtomicUsize, opening: bool) {
-    let _ = depth.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+    let _ = depth.try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
         Some(if opening {
             n.saturating_add(1)
         } else {
