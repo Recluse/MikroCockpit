@@ -294,7 +294,13 @@ static void decorateMenu(NSMenu *menu, NSString *color, BOOL direct, BOOL root, 
             BOOL heading=[@[@"Router",@"Addresses",@"Connection"] containsObject:item.title];
             item.view=infoRow(item.title,heading,color);
         }
-        NSString *name=iconName(item.title);if(name) { item.image=menuIcon(name,color); if (@available(macOS 27.0, *)) item.preferredImageVisibility=NSMenuItemImageVisibilityVisible; }
+        NSString *name=iconName(item.title);if(name) { item.image=menuIcon(name,color);
+            // SDK-gated: preferredImageVisibility only exists in the macOS 27 SDK,
+            // and build.rs must keep compiling against older SDKs (CI runners).
+#if defined(MAC_OS_X_VERSION_MAX_ALLOWED) && MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
+            if (@available(macOS 27.0, *)) item.preferredImageVisibility=NSMenuItemImageVisibilityVisible;
+#endif
+        }
     }
 }
 void cockpit_style_menu(void *pointer, const char *theme, const char *color, bool direct, const char *thisMac, bool thisDirect) {
