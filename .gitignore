@@ -1,0 +1,7 @@
+/target/
+/dist/
+/state/
+/settings.json
+/.cargo-local/
+/.DS_Store
+**/.DS_Store

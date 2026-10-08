@@ -1,0 +1,35 @@
+{
+  "host": "192.168.88.1",
+  "user": "mikrocockpit",
+  "identity": "~/.ssh/id_ed25519",
+  "mihomo_url": "",
+  "mihomo_group": "PROXY",
+  "route_table": "proxy",
+  "managed_wireguard": [],
+  "poll_seconds": 20,
+  "name": "My router",
+  "lan_cidrs": [
+    "192.168.88.0/24"
+  ],
+  "lan_interface_list": "LAN",
+  "wan_interfaces": [
+    "ether1"
+  ],
+  "bypass_list": "vpn-bypass",
+  "protected_wireguard": [],
+  "extra_direct_rules": [],
+  "tray_order": [
+    "direct",
+    "exits",
+    "routes",
+    "wireguard",
+    "bypass"
+  ],
+  "tray_title": "custom",
+  "status_fields": [
+    "internet",
+    "speed",
+    "exit"
+  ],
+  "status_interfaces": []
+}

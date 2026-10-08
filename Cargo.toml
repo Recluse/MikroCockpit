@@ -1,0 +1,21 @@
+[package]
+name = "mikrocockpit"
+version = "0.1.0"
+edition = "2024"
+description = "Native macOS menu bar controller for MikroTik routers"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tao = "0.37"
+tray-icon = "0.26"
+tiny_http = "0.12"
+
+# Already used by tao/tray-icon; observe native menu tracking directly.
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSNotification", "NSOperation", "NSString", "block2"] }
+
+# PNG is already a tray-icon dependency.
+png = "0.18"
