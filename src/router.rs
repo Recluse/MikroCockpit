@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::Read,
+    io::{Read, Write},
     net::Ipv4Addr,
     path::Path,
     process::{Command, Stdio},
@@ -41,6 +41,8 @@ pub struct Config {
     pub status_interfaces: Vec<String>,
     #[serde(default)]
     pub mihomo_secret_env: Option<String>,
+    #[serde(default)]
+    pub mihomo_secret: Option<String>,
 }
 fn system_style() -> String {
     "system".into()
@@ -82,8 +84,9 @@ impl Config {
                 return Err("Invalid name in settings".into());
             }
         }
-        // Paths and interface/list names travel into argv and quote()-wrapped
-        // RouterOS scripts; keep them printable and never option-like.
+        // The identity path travels into ssh argv and interface/list names into
+        // quote()-wrapped RouterOS scripts (delivered on stdin); keep them
+        // printable and never option-like.
         if self.identity.is_empty()
             || self.identity.starts_with('-')
             || !self.identity.bytes().all(|b| (0x20..0x7f).contains(&b))
@@ -189,18 +192,21 @@ impl Config {
         Ok(())
     }
     pub fn ssh(&self, script: &str) -> Result<String> {
-        run(&mut self.ssh_command(script)?, Duration::from_secs(18))
+        // The script may embed the mihomo Bearer token, so it travels on stdin —
+        // never as an ssh argv element, which any local process can read via ps.
+        run_stdin(
+            &mut self.ssh_command()?,
+            Some(script),
+            Duration::from_secs(18),
+            false,
+        )
     }
     pub(crate) fn ssh_probe(&self, script: &str) -> Result<String> {
         // RouterOS container shell ends the SSH session with status 1 even on success.
         // Only the fixed IP probe uses this; its caller validates the entire stdout.
-        run_output(
-            &mut self.ssh_command(script)?,
-            Duration::from_secs(18),
-            true,
-        )
+        run_stdin(&mut self.ssh_command()?, Some(script), Duration::from_secs(18), true)
     }
-    fn ssh_command(&self, script: &str) -> Result<Command> {
+    fn ssh_command(&self) -> Result<Command> {
         let key = if let Some(s) = self.identity.strip_prefix("~/") {
             format!(
                 "{}/{}",
@@ -228,8 +234,9 @@ impl Config {
             "-i",
             &key,
             &format!("{}@{}", self.user, self.host),
-            script,
         ]);
+        // No remote command in argv: the RouterOS console executes the script fed
+        // on stdin (`sh -s` does not exist on RouterOS — verified against it).
         Ok(c)
     }
     pub fn api(&self, path: &str, body: Option<Value>) -> Result<Value> {
@@ -241,9 +248,14 @@ impl Config {
             quote(&format!("{}{}", self.mihomo_url, path))
         );
         let mut headers = String::from("Content-Type: application/json");
-        if let Some(env) = &self.mihomo_secret_env {
-            let secret = std::env::var(env)
-                .map_err(|_| format!("Set the {env} environment variable for mihomo"))?;
+        let secret = if let Some(sec) = &self.mihomo_secret {
+            Some(sec.clone())
+        } else if let Some(env) = &self.mihomo_secret_env {
+            Some(std::env::var(env).map_err(|_| format!("Set the {env} environment variable for mihomo"))?)
+        } else {
+            None
+        };
+        if let Some(secret) = secret {
             if secret.contains([',', '\r', '\n']) {
                 return Err("Invalid mihomo token".into());
             }
@@ -703,12 +715,25 @@ pub fn run(c: &mut Command, timeout: Duration) -> Result<String> {
     run_output(c, timeout, false)
 }
 fn run_output(c: &mut Command, timeout: Duration, probe_stdout: bool) -> Result<String> {
+    run_stdin(c, None, timeout, probe_stdout)
+}
+fn run_stdin(
+    c: &mut Command,
+    stdin: Option<&str>,
+    timeout: Duration,
+    probe_stdout: bool,
+) -> Result<String> {
     let mut child = c
-        .stdin(Stdio::null())
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
+    let stdin_pipe = child.stdin.take();
     let mut stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();
     // Drain both pipes while waiting, so a full stderr cannot deadlock SSH.
@@ -720,6 +745,16 @@ fn run_output(c: &mut Command, timeout: Duration, probe_stdout: bool) -> Result<
         let mut b = Vec::new();
         stderr.read_to_end(&mut b).map(|_| b)
     });
+    // Readers are running already, so a large stdout cannot deadlock this write.
+    let mut write_error = None;
+    if let (Some(mut pipe), Some(script)) = (stdin_pipe, stdin) {
+        // The RouterOS console executes a line only after "\n".
+        let mut line = script.as_bytes().to_vec();
+        line.push(b'\n');
+        if let Err(e) = pipe.write_all(&line) {
+            write_error = Some(e.to_string());
+        }
+    } // pipe dropped here: the remote side sees EOF.
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -756,6 +791,9 @@ fn run_output(c: &mut Command, timeout: Duration, probe_stdout: bool) -> Result<
         } else {
             detail
         });
+    }
+    if let Some(e) = write_error {
+        return Err(format!("ssh stdin write failed: {e}"));
     }
     Ok(String::from_utf8_lossy(&out).into_owned())
 }

@@ -4,6 +4,7 @@
   "identity": "~/.ssh/id_ed25519",
   "mihomo_url": "",
   "mihomo_group": "PROXY",
+  "mihomo_secret": "",
   "route_table": "proxy",
   "managed_wireguard": [],
   "poll_seconds": 20,

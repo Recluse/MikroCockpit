@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::Read,
+    io::{Read, Write},
     path::PathBuf,
     process::Command,
     sync::{
@@ -144,8 +144,18 @@ pub fn save_preferences(dir: &std::path::Path, value: &Value) -> Result<()> {
     if !preferences(value) {
         return Err("Invalid dashboard preferences".into());
     }
-    fs::write(dir.join("preferences.tmp"), value.to_string()).map_err(|e| e.to_string())?;
-    fs::rename(dir.join("preferences.tmp"), dir.join("preferences.json")).map_err(|e| e.to_string())
+    let tmp = dir.join("preferences.tmp");
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
+    file.write_all(value.to_string().as_bytes())
+        .map_err(|e| e.to_string())?;
+    fs::rename(&tmp, dir.join("preferences.json")).map_err(|e| e.to_string())
 }
 pub fn start(
     proxy: EventLoopProxy<AppEvent>,

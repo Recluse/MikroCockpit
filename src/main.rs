@@ -12,7 +12,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::PathBuf,
-    process::Command,
+    process::{Command, Stdio},
     sync::mpsc,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -121,7 +121,14 @@ fn route_name(route: &serde_json::Value) -> String {
 }
 fn audit(path: &std::path::Path, text: &str) {
     let line = serde_json::json!({"unix_time":SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),"result":text});
-    match OpenOptions::new().create(true).append(true).open(path) {
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(path) {
         Ok(mut f) => {
             if let Err(e) = writeln!(f, "{line}") {
                 eprintln!("MikroCockpit: audit write failed: {e}");
@@ -648,6 +655,11 @@ fn start() -> Result<()> {
     let mut show_dashboard = native_smoke || args.iter().any(|a| a == "--dashboard");
     let dir = path.parent().unwrap().join("state");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+    }
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -736,7 +748,16 @@ fn start() -> Result<()> {
                 let written = serde_json::to_vec_pretty(s)
                     .map_err(|e| e.to_string())
                     .and_then(|bytes| fs::write(&tmp_path, bytes).map_err(|e| e.to_string()))
-                    .and_then(|()| fs::rename(&tmp_path, &final_path).map_err(|e| e.to_string()));
+                    .and_then(|()| {
+                        // Owner-only before the atomic rename; the final file inherits this mode.
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600))
+                                .map_err(|e| e.to_string())?;
+                        }
+                        fs::rename(&tmp_path, &final_path).map_err(|e| e.to_string())
+                    });
                 if let Err(e) = written {
                     // Not fatal for polling, but silence here hides a broken report button.
                     eprintln!("MikroCockpit: snapshot write failed: {e}");
@@ -873,7 +894,23 @@ fn start() -> Result<()> {
             Event::UserEvent(AppEvent::Menu(e)) => match e.id.0.as_str() {
                 "quit" => *flow = ControlFlow::Exit,
                 "dashboard" => {native::update(&web::view(&shared,&dir,&config),true);},
-                "web-dashboard" => {let _=Command::new("/usr/bin/open").arg(&dashboard).spawn();},
+                "web-dashboard" => {
+                    // The auth token must not appear in `open` argv (readable via ps):
+                    // hand the AppleScript with the full URL to osascript over stdin.
+                    let script = format!(
+                        "open location \"{}\"",
+                        dashboard.replace('\\', "\\\\").replace('"', "\\\"")
+                    );
+                    if let Ok(mut child) = Command::new("/usr/bin/osascript")
+                        .stdin(Stdio::piped())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        && let Some(mut pipe) = child.stdin.take()
+                    {
+                        let _ = pipe.write_all(script.as_bytes());
+                    }
+                }
                 "settings" => {
                     let _ = Command::new("/usr/bin/open")
                         .args(["-t"])
